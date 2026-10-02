@@ -397,7 +397,6 @@ def train(config, train_loader=None, val_loader=None, model=None, encoder_layer_
 
     history_name = config.history_filename or f"{config.stage_name}_training_history.json"
     history_path = os.path.join(config.log_dir, history_name)
-    history["history_path"] = history_path
     with open(history_path, "w", encoding="utf-8") as handle:
         json.dump(_json_safe(history), handle, indent=2, allow_nan=False)
     print(f"Training history saved to: {history_path}")

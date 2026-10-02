@@ -1,11 +1,11 @@
-"""Explicit experiment configuration and per-stage protocol factories.
+"""Explicit experiment configuration and two-stage protocol factories.
 
-All newly trained stages use the stable v2 spatial-softmax objective. Stage 1
-starts from ImageNet encoder weights, Stage 2 initializes from the resulting
-fixed Stage 1 checkpoint, and Stage 3 adapts the trained Stage 2 v2 checkpoint
-with a deliberately small trainable scope. Historical checkpoints and logs
-remain usable as legacy artifacts. No mutable module-level configuration
-object is used.
+Both training stages use the stable v2 spatial-softmax objective. Stage 1
+(pre-training) starts from ImageNet encoder weights and learns general
+cephalometric representations from the public ISBI dataset. Stage 2
+(fine-tuning) adapts the resulting pre-trained model to the in-house domain
+with a deliberately small trainable scope. No mutable module-level
+configuration object is used.
 """
 from dataclasses import asdict, dataclass, field, replace
 from numbers import Integral
@@ -18,11 +18,11 @@ from typing import Any, Dict, List, Optional, Tuple
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
-STAGE3_TRAIN_IDS: Tuple[int, ...] = (
+FINETUNE_TRAIN_IDS: Tuple[int, ...] = (
     25, 80, 71, 46, 26, 41, 33, 72, 32, 24,
     36, 31, 47, 50, 27, 76, 38, 6, 22, 69,
 )
-STAGE3_VAL_IDS: Tuple[int, ...] = (
+FINETUNE_VAL_IDS: Tuple[int, ...] = (
     39, 52, 1, 75, 67, 13, 17, 37, 60, 44,
     58, 29, 43, 48, 59, 61, 18, 65, 54, 57,
     5, 45, 2, 70, 28, 23, 16, 15, 8, 21,
@@ -37,14 +37,9 @@ def _env_path(name: str, relative_default: str) -> str:
     return str(Path(value).expanduser()) if value else str(REPOSITORY_ROOT / relative_default)
 
 
-def _fixed_weights_path() -> str:
-    """Resolve the approved Stage 2 initialization checkpoint."""
-    return _env_path("CEPHALO_FIXED_WEIGHTS", "checkpoints/best_model_fixed.weights.h5")
-
-
-def _stage2_weights_path() -> str:
-    """Resolve the approved Stage 3 initialization checkpoint."""
-    return _env_path("CEPHALO_STAGE2_WEIGHTS", "checkpoints/best_model_stage2_v2.weights.h5")
+def _pretrained_weights_path() -> str:
+    """Resolve the Stage 1 pre-trained checkpoint used by Stage 2 fine-tuning."""
+    return _env_path("CEPHALO_PRETRAINED_WEIGHTS", "checkpoints/best_model_fixed.weights.h5")
 
 
 def _output_path(name: str, relative_default: str) -> str:
@@ -69,8 +64,8 @@ def resolve_data_dir(root: os.PathLike | str, relative: os.PathLike | str) -> st
     return str(exact)
 
 
-def validate_stage3_split(train_ids, val_ids, reference_train20=None, require_val_count=60):
-    """Validate an intended 10/60 or 20/60 in-house experiment split.
+def validate_finetune_split(train_ids, val_ids, reference_train20=None, require_val_count=60):
+    """Validate an intended 10/60 or 20/60 in-house fine-tuning split.
 
     IDs must be unique built-in/NumPy integer values in 1..80. A 20/60 split
     must account for all images. A 10/60 split reports the other ten as unused
@@ -87,9 +82,9 @@ def validate_stage3_split(train_ids, val_ids, reference_train20=None, require_va
         if invalid:
             raise ValueError(f"{name} contains IDs outside 1..80: {invalid}")
     if len(train_ids) not in (10, 20):
-        raise ValueError(f"Stage 3 requires 10 or 20 training IDs; got {len(train_ids)}")
+        raise ValueError(f"Fine-tuning requires 10 or 20 training IDs; got {len(train_ids)}")
     if len(val_ids) != require_val_count:
-        raise ValueError(f"Stage 3 requires {require_val_count} validation IDs; got {len(val_ids)}")
+        raise ValueError(f"Fine-tuning requires {require_val_count} validation IDs; got {len(val_ids)}")
     overlap = sorted(set(train_ids) & set(val_ids))
     if overlap:
         raise ValueError(f"Training and validation IDs overlap: {overlap}")
@@ -119,14 +114,14 @@ def _experiment_slug(experiment_name, sample_count):
     marker = f"n{sample_count}"
     if marker not in slug.lower():
         slug = f"{slug}_{marker}"
-    return slug or f"stage3_{marker}"
+    return slug or f"finetune_{marker}"
 
 
-def make_stage3_experiment_config(train_ids, val_ids, experiment_name="stage3_n20",
-                                  trainable_scope="dec2_head_logits", reference_train20=None,
-                                  **overrides):
-    """Create validated Stage 3 config with non-overwriting artifact names."""
-    split = validate_stage3_split(train_ids, val_ids, reference_train20=reference_train20)
+def make_finetune_experiment_config(train_ids, val_ids, experiment_name="finetune_n20",
+                                    trainable_scope="dec2_head_logits", reference_train20=None,
+                                    **overrides):
+    """Create validated fine-tuning config with non-overwriting artifact names."""
+    split = validate_finetune_split(train_ids, val_ids, reference_train20=reference_train20)
     slug = _experiment_slug(experiment_name, split["sample_count"])
     values = dict(
         experiment_name=slug,
@@ -134,12 +129,12 @@ def make_stage3_experiment_config(train_ids, val_ids, experiment_name="stage3_n2
         train_image_ids=split["train_ids"],
         val_image_ids=split["val_ids"],
         unused_image_ids=split["unused_ids"],
-        output_filename=f"best_model_stage3_v3_{slug}_best_loss.weights.h5",
-        best_mre_output_filename=f"best_model_stage3_v3_{slug}_best_mre.weights.h5",
-        history_filename=f"stage3_v3_{slug}_training_history.json",
+        output_filename=f"best_model_finetune_v3_{slug}_best_loss.weights.h5",
+        best_mre_output_filename=f"best_model_finetune_v3_{slug}_best_mre.weights.h5",
+        history_filename=f"finetune_v3_{slug}_training_history.json",
     )
     values.update(overrides)
-    return make_stage3_finetune_config(**values)
+    return make_stage2_finetune_config(**values)
 
 
 def _landmark_names():
@@ -202,7 +197,7 @@ class Config:
     encoder_mode: str = "unfrozen"  # stage1, unfrozen, or conv5_only
     freeze_encoder_batch_norm: bool = False
     # None preserves the stage's encoder policy and leaves the decoder trainable.
-    # Stage 3 selects either dec2/head/logits or only head/logits.
+    # Stage 2 fine-tuning uses dec2/head/logits or only head/logits.
     trainable_scope: Optional[str] = None
 
     optimizer: str = "adam"
@@ -279,12 +274,10 @@ def _stage_config(**values) -> Config:
 
 
 def make_stage1_initial_config(**overrides) -> Config:
-    """Stable-v2 Stage 1 with validation-loss model selection.
+    """Stable-v2 Stage 1 — public-data pre-training with validation-loss model selection.
 
-    The weighted architecture remains compatible with the later stages, while
-    the newly trained checkpoint uses the same spatial-softmax/KL/smooth-L1
-    formulation as Stages 2 and 3. The conventional fixed-checkpoint filename
-    is retained so Stage 2 can consume the rerun without path changes.
+    The weighted architecture is retained unchanged between stages, using the
+    same spatial-softmax/KL/smooth-L1 formulation as Stage 2 fine-tuning.
     """
     values = dict(
         stage_name="stage1_initial_v2",
@@ -326,47 +319,10 @@ def make_stage1_initial_config(**overrides) -> Config:
     return _stage_config(**values)
 
 
-def make_stage2_extended_config(**overrides) -> Config:
-    """Stable v2 Stage 2, initialized only from the Stage 1 fixed weights."""
+def make_stage2_finetune_config(**overrides) -> Config:
+    """Anti-overfitting Stage 2 fine-tuning initialized from the Stage 1 pre-trained model."""
     values = dict(
-        stage_name="stage2_extended_v2",
-        model_version="v2",
-        objective_version="v2",
-        decoding_version="spatial_softmax",
-        decoder_filters=(1024, 512, 256),
-        decoder_dropout_rate=0.10,
-        epochs=120,
-        batch_size=4,
-        learning_rate=3e-5,
-        warmup_epochs=0,
-        coord_loss_weight=10.0,
-        heatmap_loss_weight=0.1,
-        coord_loss="smooth_l1",
-        heatmap_loss="spatial_kl",
-        encoder_mode="unfrozen",
-        freeze_encoder_batch_norm=True,
-        optimizer="adamw",
-        weight_decay=1e-5,
-        gradient_clip_norm=2.0,
-        lr_plateau_factor=0.5,
-        lr_plateau_patience=8,
-        lr_plateau_min_delta=1e-4,
-        min_learning_rate=1e-7,
-        early_stopping_patience=20,
-        early_stopping_min_delta=1e-4,
-        output_filename="best_model_stage2_v2.weights.h5",
-        history_filename="stage2_extended_v2_training_history.json",
-        pretrained_weights=_fixed_weights_path(),
-        initialization_source="stage1_fixed",
-    )
-    values.update(overrides)
-    return _stage_config(**values)
-
-
-def make_stage3_finetune_config(**overrides) -> Config:
-    """Anti-overfitting Stage 3 initialized from the trained Stage 2 v2 weights."""
-    values = dict(
-        stage_name="stage3_finetune_v3",
+        stage_name="stage2_finetune_v3",
         model_version="v2",
         objective_version="v2",
         decoding_version="spatial_softmax",
@@ -374,7 +330,7 @@ def make_stage3_finetune_config(**overrides) -> Config:
         if Path("/kaggle").is_dir() else os.getenv("CEPHALO_FT_ROOT", str(REPOSITORY_ROOT / "data/inhouse")),
         decoder_filters=(1024, 512, 256),
         decoder_dropout_rate=0.20,
-        epochs=25,
+        epochs=50,
         batch_size=2,
         learning_rate=5e-6,
         warmup_epochs=0,
@@ -397,7 +353,6 @@ def make_stage3_finetune_config(**overrides) -> Config:
         early_stopping_min_delta=2e-4,
         early_stopping_monitor="val_loss",
         checkpoint_monitor="val_loss",
-        # Deliberately modest for the 10/20-image adaptation experiments.
         horizontal_flip=False,
         horizontal_flip_prob=0.0,
         rotation_range=5.0,
@@ -412,15 +367,16 @@ def make_stage3_finetune_config(**overrides) -> Config:
         contrast_prob=0.25,
         gaussian_noise_std=0.01,
         noise_prob=0.15,
+        image_resolution=0.08,
         out_of_frame_landmark_policy="reject_transform",
-        output_filename="best_model_stage3_v3_n20_best_loss.weights.h5",
-        best_mre_output_filename="best_model_stage3_v3_n20_best_mre.weights.h5",
-        history_filename="stage3_v3_n20_training_history.json",
-        pretrained_weights=_stage2_weights_path(),
-        initialization_source="stage2_v2",
-        experiment_name="stage3_n20",
-        train_image_ids=STAGE3_TRAIN_IDS,
-        val_image_ids=STAGE3_VAL_IDS,
+        output_filename="best_model_finetune_v3_n20_best_loss.weights.h5",
+        best_mre_output_filename="best_model_finetune_v3_n20_best_mre.weights.h5",
+        history_filename="finetune_v3_n20_training_history.json",
+        pretrained_weights=_pretrained_weights_path(),
+        initialization_source="stage1_fixed",
+        experiment_name="finetune_n20",
+        train_image_ids=FINETUNE_TRAIN_IDS,
+        val_image_ids=FINETUNE_VAL_IDS,
     )
     values.update(overrides)
     config = _stage_config(**values)
@@ -432,13 +388,12 @@ def make_stage3_finetune_config(**overrides) -> Config:
 
 
 stage1 = make_stage1_initial_config
-stage2 = make_stage2_extended_config
-stage3 = make_stage3_finetune_config
+stage2 = make_stage2_finetune_config
 
 
 __all__ = [
-    "Config", "REPOSITORY_ROOT", "STAGE3_TRAIN_IDS", "STAGE3_VAL_IDS",
-    "resolve_data_dir", "validate_stage3_split", "make_stage1_initial_config",
-    "make_stage2_extended_config", "make_stage3_finetune_config",
-    "make_stage3_experiment_config", "stage1", "stage2", "stage3",
+    "Config", "REPOSITORY_ROOT", "FINETUNE_TRAIN_IDS", "FINETUNE_VAL_IDS",
+    "resolve_data_dir", "validate_finetune_split", "make_stage1_initial_config",
+    "make_stage2_finetune_config", "make_finetune_experiment_config",
+    "stage1", "stage2",
 ]

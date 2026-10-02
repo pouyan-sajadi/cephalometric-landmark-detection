@@ -1,7 +1,7 @@
 """Shared image, annotation, and batch preprocessing.
 
 Every operation that depends on experiment dimensions receives an explicit
-``config``.  ``src.dataset`` continues to re-export the ISBI names.
+``config``.
 """
 from pathlib import Path
 import re
@@ -53,8 +53,7 @@ def normalize_image(image):
 def generate_heatmaps(landmarks_norm, config, integer_centres=False):
     """Generate Gaussian targets using the configured coordinate convention.
 
-    Legacy Stage 1 deliberately retains multiplication by ``width``/``height``.
-    V2 aligns normalized endpoints with the inclusive decoder grid, so 0 maps
+    V2 aligns normalised endpoints with the inclusive decoder grid, so 0 maps
     to pixel 0 and 1 maps exactly to pixel ``size - 1``.
     """
     landmarks_norm = np.asarray(landmarks_norm, dtype=np.float32)
@@ -100,9 +99,9 @@ def _image_files(directory):
 def collect_isbi_image_paths(root_path, subdirectories=None):
     """Collect ISBI images from explicitly selected dataset subdirectories.
 
-    Stage 1/legacy callers can continue using ``ISBIDataset``.  Stage 2 uses
-    ``Dataset/Training``, ``Dataset/Testing/Test1``, and ``Dataset/Testing/Test2``
-    together, as required by the extended-training protocol.
+    Callers that need only the original ISBI train/test split can use
+    ``ISBIDataset`` directly. This helper is retained for compatibility
+    with paths-based dataset construction.
     """
     root = Path(root_path)
     subdirectories = subdirectories or (
